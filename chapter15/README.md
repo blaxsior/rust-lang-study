@@ -57,3 +57,202 @@ pub enum List {
   Nil,
 }
 ```
+
+# Deref 트레잇: 역참조
+역참조 연산자(dereference operator) `*`의 동작을 커스터마이징하기 위한 트레잇.
+
+> 역참조 연산자(*)란?  
+>
+> 메모리 주소를 기반으로 해당 주소에 저장된 값에 접근하는 연산자
+
+스마트 포인터도 일반 참조자처럼 값에 접근할 수 있도록 만들기 위해 오버라이딩
+
+```rust
+
+struct MyBox<T>(T);
+
+impl<T> MyBox<T> {
+    fn new(x: T) -> MyBox<T> {
+        MyBox(x)
+    }
+}
+
+impl<T> Deref for MyBox<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0    
+    }
+}
+
+let my_box = MyBox::new(3);
+assert_eq!(3, *my_box);
+println!("success!");
+
+```
+`MyBox<T>`는 스마트 포인터로 이용되며, 역참조 연산자를 이용했을 때 내부적으로 관리하고 있는 T 타입 데이터에 대한 역참조를 제공해야 한다.  
+
+`Deref`를 구현했을 때 assert 부분은 `*(my_box.deref())`으로 동작한다. `*`연산자는 `deref` 메서드를 호출하거나 일반 역참조를 대입하므로, 개발 시 두 케이스를 동일하게 다룰 수 있다.
+
+## 역참조 강제(deref coercion)
+Deref을 구현한 어떤 타입의 참조자를 다른 타입의 참조자로 바꿔주는 것. deref 메서드의 반환 타입을 다른 타입으로 설정하여 구현 가능.
+
+&String을 &str로 다룰 수 있는 이유는 내부적으로 String의 `Deref` 구현에서 &str을 반환하기 때문.
+```rust
+// string.rs 소스 코드 중...
+impl ops::Deref for String {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &str {
+        unsafe { str::from_utf8_unchecked(&self.vec) }
+    }
+}
+```
+역참조 강제 기능 덕분에 String -> str 변환을 명시적으로 작성하지 않고도 다룰 수 있다.
+```rust
+let m = MyBox::new(String::from("hello"));
+do_something(&m); // 역참조 강제를 통해 바로 &str을 얻을 수 있음
+do_something(&(*m)[..]); // &String -> String -> str -> &str 
+```
+## 역참조 강제 & 가변성
+`DerefMut` 트레잇을 구현, 가변 참조자에 대한 `*`연산자를 오버라이딩 할 수 있다.
+- `T: Deref<Target=U>`: &T -> &U
+- `T: DerefMut<Target=U>`: &mut T -> &mut U
+- `T: Deref<Target=U>`: &mut T -> &U
+
+3번째, 즉 가변 참조자를 불변으로 강제할 수는 있지만 역은 불가능.
+1. 대여 규칙에 따라 가변 참조자는 데이터에 대한 유일한 참조여야 함.
+2. 유일한 참조를 불변으로 만들더라도 대여 규칙이 어긋나지 않음
+3. 불변 참조를 가변 참조로 만들 때 "유일한" 참조를 보장 불가능
+
+따라서, 불변 -> 가변 참조로 변경 가능함을 보장 불가.
+
+# Drop 트레잇: 메모리 정리
+값이 스코프 바깥으로 벗어날 때 수행할 동작을 커스터마이징 
+
+> rust는 변수가 스코프를 벗어날 때 `drop` 메서드를 실행하여 메모리를 정리
+
+ex: `Box<T>`는 버려질 때 할당된 힙 공간을 해제해야 한다.
+
+```rust
+pub trait Drop {
+    fn drop(&mut self);
+}
+```
+
+`Drop` 트레잇은 가변 참조자를 받는 drop 메서드를 포함. drop 메서드는 변수가 스코프를 벗어날 때 실행되는, 일종의 소멸자.
+
+```rust
+let c1 = CustomSmartPointer {
+    data: String::from("hello csp01"),
+};
+let c2 = CustomSmartPointer {
+    data: String::from("hello csp02"),
+};
+println!("csp created");
+```
+
+위 코드는 다음과 같은 메시지를 출력한다.
+
+```
+csp created
+drop customSmartPointer data: hello csp02
+drop customSmartPointer data: hello csp01
+```
+
+프로그래밍 언어에서 변수는 스택을 통해 관리되기 때문에 제거는 생성의 역순이다.
+
+## std::mem::drop을 통해 값 일찍 버리기
+가끔 스코프를 벗어나기 전에 값을 제거하고 싶을 수 있다. 이때 `Drop` 트레잇은 변수가 스코프를 벗어나는 시점에 `drop`을 호출하며, 개발자가 직접 `drop`을 호출할 수는 없다. 만약 개발자가 직접 `drop`을 호출할 수 있다면 메모리를 2번 해제하는 double free 에러가 발생할 수 있기 때문이다.
+
+따라서, 스코프를 벗어나기 전에 개발자 재량으로 강제로 값을 버리기 위한 별도의 방법이 필요하며, rust는 `std::mem::drop`을 통해 해당 동작을 제공한다.
+
+```rust
+pub fn drop<T>(_x: T) {}
+```
+
+입력 파라미터 _x에 대한 소유권이 `drop` 메서드로 이동(move)한다. 메서드의 스코프를 벗어나는 순간 `Drop` 트레잇에 정의된 `drop` 메서드가 실행되어 할당된 메모리를 해제한다.
+
+별도의 내부 구현 없이 소유권 시스템만을 활용하여 메모리를 먼저 해제할 수 있게 만든다.
+
+```rust
+use std::mem::{drop};
+let c1 = CustomSmartPointer {
+    data: String::from("hello csp01"),
+};
+
+drop(c1);
+
+let c2 = CustomSmartPointer {
+    data: String::from("hello csp02"),
+};
+println!("csp created");
+```
+drop 메서드를 이용하여 c1 메모리를 명시적으로 할당 해제한다. c1의 소유권이 drop 메서드로 이동하고, drop 메서드 스코프를 벗어날 때 c1이 할당 해제되는 방식이다.
+```
+drop customSmartPointer data: hello csp01
+csp created
+drop customSmartPointer data: hello csp02
+```
+소유권 시스템에 의해 단 한번만 `Drop` 트레잇의 `drop`을 호출하도록 보장하므로, 안전하게 메모리를 할당 / 해제할 수 있다.
+
+# Rc&lt;T&gt; : 참조 카운트
+한 값에 대한 복수의 소유권이 필요한 경우가 있다. 그래프에서 여러 노드가 하나의 노드를 가리킬 수 있으며, 소유자가 0이 아니라면 할당 해제되면 안된다.
+
+`Rc<T>`는 복수 소유권을 가능하게 한다. 값에 대한 참조자의 개수를 추적하여 값이 사용 중인지 판단하며, 이를 통해 참조자가 0일 때 안전하게 메모리를 정리할 수 있다.
+
+스택 데이터는 컴파일 타임에 참조자 + 라이프타임을 통해 이 동작이 자동으로 지원된다. `Rc<T>`는 데이터를 (1) **힙**에 저장하고 싶고, 컴파일 타임에는 이 데이터가 (2) **언제 마지막으로 사용할지 알 수 없을 때** 사용한다.
+
+`Rc<T>`는 싱글 스레드 환경에서만 사용해야 한다.
+
+```rust
+use List::*;
+
+let l1 = Cons(1, Box::new(Cons(2, Box::new(Nil))));
+let l2 = Cons(3, Box::new(l1)); // l1이 move
+let l3 = Cons(4,Box::new(l1)); // moved value을 참조
+```
+
+현재 l2, l3가 동시에 l1을 참조하기를 바란다. 이때 l2를 만들 때 l1의 소유권을 가져오므로 l3에서 동시에 참조할 수 없다.
+
+여러 변수에서 소유권을 공유할 수 있도록 `Box` 대신 `Rc`를 이용한다.
+
+```rust
+use List::*;
+
+let l1 = Rc::new(Cons(1, Rc::new(Cons(2, Rc::new(Nil)))));
+let l2 = Cons(3, Rc::clone(&l1)); // clone을 통해 소유권 공유
+let l3 = Cons(4,Rc::clone(&l1)); // clone을 통해 소유권 공우
+```
+
+- new: Rc 포인터를 새롭게 생성한다.
+- clone: 기존 포인터를 복사하고, 참조 카운트를 늘린다.
+- downgrade: weak pointer로 빌린다. (참조 카운트 증가 X)
+
+`clone`을 통해 Rc 스마트 포인터를 복제, 여러 변수에서 소유권을 공유한다. 이 과정에서 참조 카운트만 늘리는 얕은 복사를 수행한다.
+
+`downgrade`을 통해 참조 카운트를 증가시키지 않는 약한 참조 기능도 지원한다. 댕글링 포인터가 발생 가능하므로, `upgrade` 메서드를 이용하여 `Weak` 포인터를 `Rc` 포인터로 변환하여 사용한다.
+
+```rust
+use List::*;
+
+let l1 = Rc::new(Cons(1, Rc::new(Cons(2, Rc::new(Nil)))));
+let l2 = Cons(3, Rc::clone(&l1));
+println!("ref count: {}", Rc::strong_count(&l1));
+let l3 = Cons(4,Rc::clone(&l1));
+println!("ref count: {}", Rc::strong_count(&l1));
+
+let l4: std::rc::Weak<List> = Rc::downgrade(&l1);
+
+if let Some(rc) = l4.upgrade() {
+    assert_eq!(&rc, &l1);
+    println!("two pointer are same!");
+}
+```
+
+```
+ref count: 2
+ref count: 3
+two pointer are same!
+```
