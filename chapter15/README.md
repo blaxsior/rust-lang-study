@@ -256,3 +256,127 @@ ref count: 2
 ref count: 3
 two pointer are same!
 ```
+
+# RefCell&lt;T&gt; & 내부 가변성
+
+## 내부 가변성(interior mutability)
+데이터에 대한 불변 참조자가 있더라도 데이터를 변경할 수 있게 하는 디자인 패턴
+
+러스트의 대여 규칙 하에서는 이 동작이 허용되지 않는다. 대신 `unsafe` 코드를 사용하여 변경 / 대여 규칙을 컴파일러 대신에 직접 다룸으로써 러스트의 규칙을 우회한다.
+
+런타임에 대여 규칙을 보장할 수 있는 경우 내부 가변성 패턴을 타입에 사용할 수 있으며, `unsafe` 코드는 API / 캡슐화를 통해 감춰지므로 사용하는 바깥 입장에서는 불변이다.
+
+어떤 값이 메서드 내부에서는 변경되지만, 다른 코드에서는 불변으로 보여야 하는 경우 사용될 수 있으며 대여 규칙의 검사 시점을 컴파일 타임에서 런타임으로 미룬다. 
+
+## RefCell&lt;T&gt;: 런타임 대여 규칙
+러스트의 대여 규칙은 다음과 같다.
+1. 1개의 가변 참조 또는 여러개의 불변 참조 중 하나만 가질 수 있다.
+2. 참조자는 항상 유효해야 한다.
+
+|타입|규칙 검사 시점|규칙 위반 시 처리|장점|
+|-|-|-|-|
+|`Box<T>`|컴파일 타임|컴파일러 에러|에러 사전 처리 & 런타임 성능 영향 X|
+|`RefCell<T>` |런타임|panic!|유연함. 정적 분석으로 불가능한 시나리오 허용|
+
+`Box<T>`는 컴파일 타임에 대여 규칙을 검사한다. 대여 규칙을 컴파일 타임에 검사할 수 있으면, 에러를 사전에 처리할 수 있어 런타임 성능에 영향을 주지 않는다.
+
+컴파일 타임에 모든 것을 분석할 수 있다면 안전성 및 성능 측면에서 좋겠지만, 실제로는 그럴 수 없다. 이렇듯 런타임 시점에 대여 규칙을 검사해야 하는 상황에서는 `RefCell<T>`을 이용한다.
+
+`RecCell<T>` 역시 `Rc<T>` 처럼 싱글 스레드 환경에서만 유효하다.
+- `Rc<T>`: 복수 소유권 허용
+- `Box<T>`: 힙 데이터 할당, 컴파일 타임에 대여 규칙 검사
+- `RefCell<T>`: 런타임에 대여 규칙 검사
+
+## 사용 방법
+```rust
+pub trait Messenger {
+  fn send(&self, msg: &str);
+}
+
+struct MockMessenger {
+    sent_messages: RefCell<Vec<String>>,
+}
+
+impl MockMessenger {
+    fn new() -> MockMessenger {
+        MockMessenger {
+            sent_messages: RefCell::new(vec![]),
+        }
+    }
+}
+// 외부에서는 불변 참조로 노출하지만, 내부적으로는 가변 참조일 수 있음.
+impl Messenger for MockMessenger {
+    fn send(&self, message: &str) {
+        self.sent_messages.borrow_mut().push(String::from(message));
+    }
+}
+```
+- 변수의 타입을 `RefCell<T>`로 감싼다.
+- `borrow_mut()`: `RefMut`를 받아 가변 참조자처럼 사용
+- `borrow()`: `Ref`를 받아 불변 참조자처럼 사용
+
+위 코드에서 Messenger에 정의 된 send는 self에 대한 불변 참조를 가지도록 정의되어 있다. 일반적으로 단순히 메시지를 보내는 경우 내부 값을 반드시 변경할 것으로 기대하지 않으므로 Messenger에 정의된 내용은 나쁘지 않다.
+
+그런데, 원활한 테스트를 위해 만든 목업 객체인 MockMessenger에서는 보낸 메시지 목록을 기억하고 있어야 한다면 어떨까? 기존 트레잇 정의로는 이 문제를 해결할 수 없다. 컴파일 타임 빌림 규칙에 따라 send 메서드 내부에서는 구조체의 값을 변경할 수 없기 때문이다.
+
+대신, 메시지 목록을 저장하는 변수 sent_messages를 `RefCell<T>`로 감싸 내부 가변성을 활용한다.
+
+## 런타임 대여 추적
+`RefCell<T>`은 런타임 대여를 위한 안전한 API를 제공한다. 변수가 런타임에 대여 규칙을 위반하는 경우 panic!을 발생시킨다.
+| API 이름 | 타입 | 대응 | 포인터 타입 |
+|-|-|-|-|
+|borrow|런타임 불변 참조| &T | `Ref<T>`|
+|borrow_mut|런타임 가변 참조| &mut T|`RefMut<T>` |
+
+런타임에 활성화 된 `Ref<T>` 및 `RefMut<T>` 참조 개수를 추적하며, 여기에 빌림 규칙을 적용한다. 이를 통해 매 시점에 여러 불변 참조 또는 하나의 가변 참조를 보장한다.
+
+```rust
+impl Messenger for MockMessenger {
+    fn send(&self, message: &str) {
+        // self.sent_messages.borrow_mut().push(String::from(message));
+
+        let mut b1 = self.sent_messages.borrow_mut();
+        let mut b2 = self.sent_messages.borrow_mut();
+
+        b1.push(String::from(message));
+        b2.push(String::from(message));
+    }
+}
+```
+
+```
+test tests::it_sends_an_over_75_percent_warning_message ... FAILED
+
+failures:
+
+---- tests::it_sends_an_over_75_percent_warning_message stdout ----
+thread 'tests::it_sends_an_over_75_percent_warning_message' panicked at src\lib.rs:81:45:
+already borrowed: BorrowMutError
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+소유권 / 빌림의 개념과 관리가 다른 언어에 비해 까다로운 편인데, 컴파일 타임에 식별할 수 없기 때문에 상당히 조심스럽게 이용해야 할 것 같다.
+
+`Rc<T>`와 조합하면 내부 가변성을 적용한 값에 대해 복수 소유자를 가지게 만들 수 있으며, 이를 통해 외부에는 불변이지만 필요에 따라 내부 가변성을 기반으로 변경할 수 있게 된다.
+
+```rust
+#[derive(PartialEq, Debug)]
+pub enum ListWithRefCell {
+    Cons(Rc<RefCell<i32>>, Rc<ListWithRefCell>),
+    Nil,
+}
+
+use chapter15::ListWithRefCell::{Cons, Nil};
+
+let value = Rc::new(RefCell::new(5));
+
+let a = Rc::new(Cons(Rc::clone(&value), Rc::new(Nil)));
+
+let b = Cons(Rc::new(RefCell::new(3)), Rc::clone(&a));
+let c = Cons(Rc::new(RefCell::new(4)), Rc::clone(&a));
+
+*value.borrow_mut() += 10;
+
+println!("a after = {:?}", a);
+println!("b after = {:?}", b);
+println!("c after = {:?}", c);
+```

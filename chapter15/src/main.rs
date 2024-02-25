@@ -1,4 +1,4 @@
-use std::{ops::Deref, rc::Rc};
+use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 fn main() {
     // box
@@ -8,11 +8,11 @@ fn main() {
     }
 
     // 박스 기반 재귀적 타입
-    {
-        use chapter15::List::{Cons, Nil};
+    // {
+    //     use chapter15::List::{Cons, Nil};
 
-        let list = Cons(1, Box::new(Cons(2, Box::new(Cons(3, Box::new(Nil))))));
-    }
+    //     let list = Cons(1, Box::new(Cons(2, Box::new(Cons(3, Box::new(Nil))))));
+    // }
 
     // Deref
     {
@@ -66,7 +66,7 @@ fn main() {
 
     // RC<T>
     {
-        use List::*;
+        use chapter15::List::*;
 
         let l1 = Rc::new(Cons(1, Rc::new(Cons(2, Rc::new(Nil)))));
         let l2 = Cons(3, Rc::clone(&l1)); // l1이 move
@@ -74,12 +74,29 @@ fn main() {
         let l3 = Cons(4,Rc::clone(&l1)); // moved value을 참조
         println!("ref count: {}", Rc::strong_count(&l1));
 
-        let l4: std::rc::Weak<List> = Rc::downgrade(&l1);
+        let l4 = Rc::downgrade(&l1);
         
         if let Some(rc) = l4.upgrade() {
             assert_eq!(&rc, &l1);
             println!("two pointer are same!");
         }
+    }
+    // RefCell With Rc
+    {
+        use chapter15::ListWithRefCell::{Cons, Nil};
+
+        let value = Rc::new(RefCell::new(5));
+
+        let a = Rc::new(Cons(Rc::clone(&value), Rc::new(Nil)));
+    
+        let b = Cons(Rc::new(RefCell::new(3)), Rc::clone(&a));
+        let c = Cons(Rc::new(RefCell::new(4)), Rc::clone(&a));
+    
+        *value.borrow_mut() += 10;
+    
+        println!("a after = {:?}", a);
+        println!("b after = {:?}", b);
+        println!("c after = {:?}", c);
     }
 }
 
@@ -112,9 +129,4 @@ impl Drop for CustomSmartPointer {
     fn drop(&mut self) {
         println!("drop customSmartPointer data: {}", self.data);
     }
-}
-#[derive(PartialEq, Debug)]
-enum List {
-    Cons(i32, Rc<List>),
-    Nil,
 }
