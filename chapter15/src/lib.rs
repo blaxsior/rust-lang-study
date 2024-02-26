@@ -9,7 +9,7 @@
 //   Nil,
 // }
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::{Rc, Weak}};
 
 #[derive(PartialEq, Debug)]
 pub enum List {
@@ -102,3 +102,15 @@ mod tests {
         assert_eq!(mock_messenger.sent_messages.borrow().len(), 1);
     }
 }
+
+#[derive(Debug)]
+pub struct Node {
+    pub value: i32,
+    pub parent: RefCell<Weak<Node>>,
+    pub children: RefCell<Vec<Rc<Node>>>,
+}
+// 자식 노드 소유 + 트리의 각 Node에 직접 접근하기를 원함
+// 부모 노드 삭제 => 자식 노드도 모두 삭제되어야.
+
+// 양쪽이 다 strong이면? 서로 1씩 들고 있으니까 삭제 안됨.
+// 따라서 한쪽은 weak로 만들어야 함.

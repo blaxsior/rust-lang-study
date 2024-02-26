@@ -227,8 +227,8 @@ let l3 = Cons(4,Rc::clone(&l1)); // clone을 통해 소유권 공우
 ```
 
 - new: Rc 포인터를 새롭게 생성한다.
-- clone: 기존 포인터를 복사하고, 참조 카운트를 늘린다.
-- downgrade: weak pointer로 빌린다. (참조 카운트 증가 X)
+- clone: 기존 포인터를 복사하고, 참조 카운트(strong_count)를 늘린다.
+- downgrade: weak pointer로 빌린다. (weak_count 증가)
 
 `clone`을 통해 Rc 스마트 포인터를 복제, 여러 변수에서 소유권을 공유한다. 이 과정에서 참조 카운트만 늘리는 얕은 복사를 수행한다.
 
@@ -380,3 +380,106 @@ println!("a after = {:?}", a);
 println!("b after = {:?}", b);
 println!("c after = {:?}", c);
 ```
+
+## 순환 참조
+```rust
+#[derive(PartialEq, Debug)]
+pub enum List {
+    Cons(i32, RefCell<Rc<List>>),
+    Nil,
+} // 리스트 다중 소유 가능 + 값 변경 가능
+
+impl List {
+    fn tail(&self) -> Option<&RefCell<Rc<List>>> {
+        match *self {
+            Self::Cons(_, ref item) => Some(item),
+            Self::Nil => None,
+        }
+    }
+}
+use List::*;
+
+let a = Rc::new(Cons(5, RefCell::new(Rc::new(Nil))));
+
+println!("a initial rc: {}", Rc::strong_count(&a));
+println!("a next item: {:?}", a.tail());
+
+let b = Rc::new(Cons(10, RefCell::new(Rc::clone(&a))));
+
+println!("a rc count after b creation = {}", Rc::strong_count(&a));
+println!("b initial rc count = {}", Rc::strong_count(&b));
+println!("b next item = {:?}", b.tail());
+
+// b가 a를 참조, a는 b를 참조 ...
+if let Some(link) = a.tail() {
+    *link.borrow_mut() = Rc::clone(&b); // 순환 참조
+}
+
+println!("b rc count after changing a = {}", Rc::strong_count(&b));
+println!("a rc count after changing a = {}", Rc::strong_count(&a));
+
+// println!("a next item = {:?}", a.tail()); // 오버플로우 발생
+```
+
+![https://doc.rust-kr.org/img/trpl15-04.svg](./img/circular.png)
+위 코드에서는 순환 참조가 발생한다. debug 출력 시 순환참조 되고 있는 값들을 스택 오버플로우가 발생할 때까지 출력하게 된다. 따라서 내부 가변성 / 참조 카운팅 기능을 가진 타입을 이용할 때는 순환 참조가 발생하지 않도록 주의한다.
+
+순환 참조를 피하기 위해 소유권을 가지지 않는 참조자를 만들 수도 있다.
+
+## Weak&lt;T&gt;: 약한 참조
+`Rc::downgrade`로 약한 참조를 만들 수 있다. 약한 참조는 값에 대한 소유권을 가지지 않으며, strong_count 대신 weak_count을 증가시킨다.
+
+약한 참조는 사용 시점에 값이 유효한지 알 수 없어, 사용하기 전에 항상 값의 존재를 확인해야 한다. `Weak:upgrade` 메서드를 통해 처리할 수 있다.
+
+- `Rc::downgrade`: weak pointer 생성. weak_count 증가
+- `Weak::upgrade`: 값의 유효성을 확인, Option 타입으로 반환
+
+```rust
+use chapter15::Node;
+let leaf = Rc::new(Node {
+    value: 3,
+    parent: RefCell::new(Weak::new()),
+    children: RefCell::new(vec![]),
+});
+
+println!("leaf parent: {:?}", leaf.parent.borrow().upgrade());
+
+let branch = Rc::new(Node {
+    value: 5,
+    parent: RefCell::new(Weak::new()),
+    children: RefCell::new(vec![Rc::clone(&leaf)])
+});
+
+// 왜 Rc::downgrade? 우리가 원하는 값이 내부의 노드니까.
+// rust 공식 문서를 보니까, Weak ptr을 Weak로 어떻게 만들기보다는 
+// Rc::downgrade로 얻어오는 것이 일반적임.
+*leaf.parent.borrow_mut() = Rc::downgrade(&branch);
+
+println!("leaf parent: {:#?}", leaf.parent.borrow().upgrade());
+```
+
+```
+leaf parent: None
+leaf parent: Some(
+    Node {
+        value: 5,
+        parent: RefCell {
+            value: (Weak),
+        },
+        children: RefCell {
+            value: [
+                Node {
+                    value: 3,
+                    parent: RefCell {
+                        value: (Weak),
+                    },
+                    children: RefCell {
+                        value: [],
+                    },
+                },
+            ],
+        },
+    },
+)
+```
+weak ptr이 가리키는 값은 객체가 소유권을 가지지 않아 존재를 보장할 수 없으므로 출력되지 않음.
