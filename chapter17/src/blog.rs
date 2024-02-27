@@ -25,6 +25,7 @@ impl Post {
   pub fn content(&self) -> &str {
     // as_ref: Option 값의 소유권이 아니라 참조자가 필요
     // unwrap: 메서드가 완성되면 Some이 들어 있음을 알고 있음
+    // 필요한 값은 &Option<Box<dyn State>>가 아니라, Option<&Box<dyn State>>
     // content: 다형성 활용!
     self.state.as_ref().unwrap().content(self)
   }

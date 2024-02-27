@@ -156,6 +156,7 @@ trait State {
 }
 
 pub struct Post {
+  // Box<dyn State>로 트레잇 객체 선언
   state: Option<Box<dyn State>>,
   content: String,
 }
@@ -246,3 +247,20 @@ impl State for Published {
 
 // 열거형을 써도 되지만, 열거형을 사용하려면 매번 match를 사용해야 해서 불편할 수 있음
 ```
+- Option::as_ref: `&Option<T>`를 `Option<&T>`로 변환
+- Option::take: 변수의 소유권을 가져오는 동시에 None으로 채움
+- Option::replace: 변수의 소유권을 가져오는 동시에 Some(T)로 채움
+
+take, 또는 replace가 필요한 이유는 rust의 모든 값은 항상 null이면 안되기 때문. Some(A)값을 가져오면서 Some(B)값으로 바꾸는 과정을 생각해보자.
+
+
+1. x == Some(A): 초기 상태
+2. temp = x: x가 가진 A 소유권 가져오기
+3. x == Null: x는 잠시동안 어떤 값도 가리키지 않음 (None은 엄연히 하나의 "값"에 해당)
+4. x = Some(B): B 값을 x에게 제공
+
+러스트 특성상 소유권을 가져가면 기존 변수에서는 접근 불가능해짐. 러스트의 값은 Null을 허용하지 않으므로 state의 소유권을 이동하는 동시에 다른 Option 값으로 채워넣어야 함. 아니면 3번 상황이 발생하므로, 특정 시점에 러스트의 타입 안정성이 망가질 수 있음.
+
+이런 상황을 대비하여 소유권을 가져오면서 다른 값으로 바꾸는 take, replace 메서드가 존재.
+
+`Box<dyn State>` 형식으로 트레잇 객체 생성 가능. 다형성을 기반으로 값을 저장하거나 반환할 때 주로 사용되는 것으로 보임.
