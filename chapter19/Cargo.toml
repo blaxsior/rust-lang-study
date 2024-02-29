@@ -1,1 +1,7 @@
-workspace = { members = ["chapter19_01", "chapter19_02", "chapter19_03"] }
+workspace = { members = [
+  "chapter19_01",
+  "chapter19_02",
+  "chapter19_03",
+  "chapter19_04_5",
+  "hello_macro",
+] }

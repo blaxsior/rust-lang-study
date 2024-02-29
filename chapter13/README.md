@@ -193,6 +193,8 @@ println!("{:#?}", list);
 
 이때 클로저 본문에서는 ```sort_operations.push(value)```에 의해 외부에 정의된 value의 소유권을 sort_operations에게 넘기려 하지만, 클로저는 ```FnMut``` 타입으로 외부 환경에 대한 소유권을 받을 수 없어 에러가 발생한다.
 
+## 클로저 반환하기
+
 # 반복자(iterator)
 일련의 아이템에 대해 순서대로 작업을 수행하는 패턴.
 
